@@ -13,7 +13,7 @@
         opts: x-systemd.idle-timeout=1min,x-systemd.automount,noauto
         passno: "1"
         path: /boot/efi
-        src: UUID={{ ansible_devices[root_disk].partitions[root_disk + '1'].uuid }}
+        src: UUID={{ ansible_devices[root_disk].partitions[root_disk + 'p1'].uuid }}
         state: mounted
 
     - name: Set the hostname
@@ -40,26 +40,61 @@
         service: systemd-networkd
         enabled: true
 
-    - name: remove the default sources file
-      file:
-        path: /etc/apt/sources.list
-        state: absent
+    - name: Install python3 apt
+      apt:
+        name:
+          - python3-apt
+        state: present
+        install_recommends: false
 
-    - name: Setup apt sources
-      template:
-        src: sources.list.j2
-        dest: "/etc/apt/sources.list.d/{{ debian_version }}.list"
-        owner: root
-        group: root
-        mode: 0o644
+    - name: Remove default apt lists
+      file:
+        name: /etc/apt/sources.list
+        state: absent
+      become: true
+
+    - name: Enable contrib and non-free repositories
+      apt_repository:
+        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }} main contrib non-free
+        filename: debian
+        state: present
+      become: true
+
+    - name: Enable backports
+      apt_repository:
+        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }}-backports main contrib non-free
+        filename: debian
+        state: present
+      become: true
+
+    - name: Set zfs apt preferences
+      copy:
+        dest: "/etc/apt/preferences.d/90_zfs"
+        content: |
+          Package: libnvpair1linux libuutil1linux libzfs2linux libzpool2linux spl-dkms zfs-dkms zfs-test zfsutils-linux zfsutils-linux-dev zfs-zed
+          Pin: release n=buster-backports
+          Pin-Priority: 990
+        mode: "0644"
+      become: true
+
+    - name: Set python3 apt preferences
+      copy:
+        dest: "/etc/apt/preferences.d/85_python"
+        content: |
+          Package: python3
+          Pin: release n=buster-backports
+          Pin-Priority: 990
+        mode: "0644"
+      become: true
 
     - name: Ensure all packages are up to date
       apt:
-        upgrade: safe
-        force_apt_get: true
+        upgrade: full
+        force_apt_get: false
         autoclean: true
         autoremove: true
         update_cache: true
+      become: true
 
     - name: Install kernel drivers utilities
       apt:
@@ -101,7 +136,6 @@
       apt:
         name:
           - console-setup
-          - dropbear-initramfs
           - linux-image-amd64
           - linux-headers-amd64
           - locales
@@ -112,6 +146,7 @@
           - grub-efi-amd64
           - grub-efi-amd64-signed
           - shim-signed
+          - openssh-server
         install_recommends: false
 
     - name: Ensure the requested locale exists
@@ -224,19 +259,10 @@
         service: tmp.mount
         enabled: true
 
-    - name: Authorize user for remote-unlock
-      authorized_key:
-        key: "{{ admin_public_key }}"
-        path: /etc/dropbear-initramfs/authorized_keys
-        user: root
-
-    - name: Configure the dropbear port
-      copy:
-        content: 'DROPBEAR_OPTIONS="-p {{ dropbear_port }}"'
-        dest: /etc/dropbear-initramfs/config
-        owner: root
-        group: root
-        mode: 0o600
+    - name: Enable openssh server
+      systemd:
+        service: ssh.service
+        enabled: true
 
     - name: Update the initramfs
       command: update-initramfs -c -k all
@@ -245,7 +271,7 @@
       lineinfile:
         path: /etc/default/grub
         regexp: '^GRUB_CMDLINE_LINUX='
-        line: 'GRUB_CMDLINE_LINUX="root=ZFS=rpool/ROOT/{{ zfs_system_root_name }}"'
+        line: 'GRUB_CMDLINE_LINUX="root=ZFS=rpool/ROOT/{{ zfs_system_root_name }} verbose intel_iommu=on iommu=pt rd.driver.blacklist=nouveau rd.module.blacklist=nouveau"'
 
     - name: Update grub configuration files
       command: update-grub
@@ -258,26 +284,6 @@
         --bootloader-id=debian \
         --recheck \
         --no-floppy
-
-    - name: Create temporary file to contain the hash for mokutil password
-      become: true
-      tempfile:
-        state: file
-        suffix: mokutil_pw
-      register: _mokutil_file
-
-    - name: Write the password to the mokutil hash file
-      become: true
-      copy:
-        content: "{{ mokutil_password }}"
-        dest: "{{ _mokutil_file.path }}"
-        mode: 0o600
-        owner: root
-        group: root
-
-    - name: Import the generated Secure boot key
-      command: mokutil --hash-file "{{ _mokutil_file.path }}" --import /root/mok.der
-      become: true
 
     - name: Snapshot the filesystems before boot
       zfs:

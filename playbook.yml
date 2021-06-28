@@ -4,8 +4,8 @@
   vars:
     ansible_user: user
     ansible_ssh_pass: live
-    ansible_python_interpreter: /usr/bin/{{ python_version }}
-    python_version: python3.9
+    ansible_python_interpreter: /usr/bin/python3
+    python_version: python3
     debian_version: "{{ ansible_distribution_release }}"
     zfs_system_root_name: "{{ ansible_distribution | lower }}-{{ debian_version }}"
 
@@ -32,17 +32,44 @@
         state: absent
       become: true
 
-    - name: Enable contrib repositories
+    - name: Enable contrib and non-free repositories
       apt_repository:
-        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }} main contrib
+        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }} main contrib non-free
         filename: debian
         state: present
       become: true
 
+    - name: Enable backports
+      apt_repository:
+        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }}-backports main contrib non-free
+        filename: debian
+        state: present
+      become: true
+
+    - name: Set zfs apt preferences
+      copy:
+        dest: "/etc/apt/preferences.d/90_zfs"
+        content: |
+          Package: libnvpair1linux libuutil1linux libzfs2linux libzpool2linux spl-dkms zfs-dkms zfs-test zfsutils-linux zfsutils-linux-dev zfs-zed
+          Pin: release n=buster-backports
+          Pin-Priority: 990
+        mode: "0644"
+      become: true
+
+    - name: Set python3 apt preferences
+      copy:
+        dest: "/etc/apt/preferences.d/85_python"
+        content: |
+          Package: python3
+          Pin: release n=buster-backports
+          Pin-Priority: 990
+        mode: "0644"
+      become: true
+
     - name: Ensure all packages are up to date
       apt:
-        upgrade: safe
-        force_apt_get: true
+        upgrade: full
+        force_apt_get: false
         autoclean: true
         autoremove: true
         update_cache: true
@@ -57,9 +84,21 @@
           - gdisk
           - mokutil
           - parted
+          - build-essential
+          - libssl-dev
+          - cargo
           - "python3-pexpect"
-          - "{{ python_version }}-venv"
+          - "python3-pip"
+          - "python3-apt"
+          - "python3-dev"
+          - "python3-venv"
+      become: true
+
+    - name: Install zfs-dkms
+      apt:
+        name:
           - zfs-dkms
+        install_recommends: yes
       become: true
 
     - name: Ensure zfs modules are loaded
@@ -85,7 +124,7 @@
         device: /dev/{{ item }}
         number: 1
         state: present
-        part_end: 2GiB
+        part_end: 512MiB
         label: gpt
         flags:
           - esp
@@ -97,8 +136,19 @@
         device: /dev/{{ item }}
         number: 2
         state: present
-        part_start: 2GiB
-        part_end: 5GiB
+        part_start: 512MiB
+        part_end: 2.5GiB
+        label: gpt
+      become: true
+      loop: "{{ root_disks }}"
+
+    - name: Create keystore partition
+      parted:
+        device: /dev/{{ item }}
+        number: 3
+        state: present
+        part_start: 2.5GiB
+        part_end: 3GiB
         label: gpt
       become: true
       loop: "{{ root_disks }}"
@@ -106,9 +156,9 @@
     - name: Create root pool partitions
       parted:
         device: /dev/{{ item }}
-        number: 3
+        number: 4
         state: present
-        part_start: 5GiB
+        part_start: 3GiB
         label: gpt
       become: true
       loop: "{{ root_disks }}"
@@ -128,7 +178,7 @@
       filesystem:
         fstype: vfat
         opts: -F 32 -s 1 -n EFI
-        dev: "/dev/disk/by-id/{{ ansible_devices[item].partitions[item + '1'].links.ids[0] }}"
+        dev: "/dev/disk/by-id/{{ ansible_devices[item].partitions[item + 'p1'].links.ids[0] }}"
       become: true
       loop: "{{ root_disks }}"
 
@@ -152,7 +202,6 @@
           -o feature@large_blocks=enabled
           -o feature@lz4_compress=enabled
           -o feature@spacemap_histogram=enabled
-          -o feature@zpool_checkpoint=enabled
           -O acltype=posixacl
           -O canmount=off
           -O compression=lz4
@@ -165,7 +214,7 @@
           bpool
           {{ pool_mode | default() }}
           {% for disk in root_disks %}
-            {{ ansible_devices[disk].partitions[disk + "2"].links.ids[0] }}
+            {{ ansible_devices[disk].partitions[disk + "p2"].links.ids[0] }}
           {% endfor %}
 
     - name: Create the zfs rpool pool
@@ -176,9 +225,6 @@
           zpool create
             -f
             -o cachefile=none
-            -O encryption=aes-256-gcm
-            -O keylocation=prompt
-            -O keyformat=passphrase
             -o ashift=12
             -O acltype=posixacl
             -O canmount=off
@@ -192,7 +238,7 @@
             rpool
             {{ pool_mode | default() }}
             {% for disk in root_disks %}
-              {{ ansible_devices[disk].partitions[disk + "3"].links.ids[0] }}
+              {{ ansible_devices[disk].partitions[disk + "p4"].links.ids[0] }}
             {% endfor %}
         responses:
           Enter passphrase: "{{ zfs_pool_password }}"
@@ -264,7 +310,7 @@
         mode: 0o1777
       become: true
 
-    - name: Deboostrap the system
+    - name: Debootstrap the system
       command: |
         debootstrap
         --include python3
@@ -272,9 +318,6 @@
         --include lsb-release
         {{ debian_version }}
         /mnt
-        {% if apt_proxy_url is defined %}
-        {{ apt_proxy_url }}/debian {{ debian_version }} main contrib
-        {% endif %}
       args:
         creates: /mnt/etc
       become: true
@@ -316,6 +359,12 @@
         state: directory
       become: true
       register: temp_path
+
+    - name: pip upgrade pip
+      pip:
+        name: pip
+        executable: pip3
+        state: latest
 
     - name: Create a virtualenv to reuse the same version of ansible
       pip:
@@ -377,6 +426,8 @@
         - tmp
         - sys
 
-    # FIXME: Running it with become fails?
     - name: Export zfs filesystems
       command: sudo zpool export -a
+
+    - name: Reboot
+      reboot:
