@@ -29,23 +29,53 @@
         insertafter: '^127.0.0.1'
         line: 127.0.1.1 {{ fqdn }} {{ fqdn.split(".")[0] }}
 
-    - name: Create the network config file
+    - name: Setup network interfaces
       template:
-        src: network.j2
-        dest: /etc/systemd/network/lan0.network
+        src: interfaces.j2
+        dest: /etc/network/interfaces
+        owner: root
+        group: root
         mode: 0o644
 
-    - name: Enable systemd-networkd
-      systemd:
-        service: systemd-networkd
-        enabled: true
+    - name: Setup dns
+      template:
+        src: resolv.j2
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: 0o644
 
-    - name: Install python3 apt
+    - name: Install apt requirements
       apt:
         name:
           - python3-apt
+          - gnupg
         state: present
         install_recommends: false
+
+    - name: Add steam apt key
+      ansible.builtin.apt_key:
+        url: http://repo.steampowered.com/steam/archive/stable/steam.gpg
+        keyring: /etc/apt/trusted.gpg.d/steam.gpg
+      become: true
+
+    - name: Add jetbrains apt key
+      ansible.builtin.apt_key:
+        url: http://http://s3.eu-central-1.amazonaws.com/jetbrains-ppa/0xA6E8698A.pub.asc
+        keyring: /etc/apt/trusted.gpg.d/jetbrains.gpg
+      become: true
+
+    - name: Check if i386 is enabled
+      shell: dpkg --print-foreign-architectures | grep i386
+      register: result_i386_check
+      changed_when: result_i386_check.rc == 1
+      failed_when: result_i386_check.rc > 1
+      become: true
+
+    - name: Enable i386 architecture
+      command: dpkg --add-architecture i386
+      when: result_i386_check.rc == 1
+      become: true
 
     - name: Remove default apt lists
       file:
@@ -55,15 +85,29 @@
 
     - name: Enable contrib and non-free repositories
       apt_repository:
-        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }} main contrib non-free
+        repo: deb http://deb.debian.org/debian bullseye main contrib non-free
         filename: debian
         state: present
       become: true
 
     - name: Enable backports
       apt_repository:
-        repo: deb http://deb.debian.org/debian {{ ansible_distribution_release }}-backports main contrib non-free
+        repo: deb http://deb.debian.org/debian bullseye-backports main contrib non-free
         filename: debian
+        state: present
+      become: true
+
+    - name: Enable steam repository
+      apt_repository:
+        repo: deb [arch=amd64,i386] http://repo.steampowered.com/steam/ stable steam
+        filename: steam
+        state: present
+      become: true
+
+    - name: Enable JetBrains repository
+      apt_repository:
+        repo: deb http://jetbrains-ppa.s3-website.eu-central-1.amazonaws.com focal main
+        filename: jetbrains
         state: present
       become: true
 
@@ -72,7 +116,7 @@
         dest: "/etc/apt/preferences.d/90_zfs"
         content: |
           Package: libnvpair1linux libuutil1linux libzfs2linux libzpool2linux spl-dkms zfs-dkms zfs-test zfsutils-linux zfsutils-linux-dev zfs-zed
-          Pin: release n=buster-backports
+          Pin: release n=bullseye
           Pin-Priority: 990
         mode: "0644"
       become: true
@@ -82,7 +126,7 @@
         dest: "/etc/apt/preferences.d/85_python"
         content: |
           Package: python3
-          Pin: release n=buster-backports
+          Pin: release n=bullseye
           Pin-Priority: 990
         mode: "0644"
       become: true
@@ -147,6 +191,47 @@
           - grub-efi-amd64-signed
           - shim-signed
           - openssh-server
+          - kde-full
+          - firmware-linux-nonfree
+          - firmware-misc-nonfree
+          - nvidia-driver
+          - libnvidia-glcore:i386
+          - libnvidia-eglcore:i386
+          - libglx-nvidia0:i386
+          - libgl1-nvidia-glvnd-glx:i386
+          - libgl1-mesa-dri:amd64
+          - libgl1-mesa-dri:i386
+          - libgl1-mesa-glx:amd64
+          - libgl1-mesa-glx:i386
+          - git
+          - nfs-common
+        install_recommends: false
+
+- name: Install required packages
+      apt:
+        name:
+          - task-kde-desktop
+          - steam-launcher
+          - partitionmanager
+          - gnome-disk-utility
+          - udisks2-lvm2
+          - udisks2-zram
+	  - udisks2-bcache
+          - udisks2-btrfs
+          - breeze-gtk-theme
+          - kde-config-gtk-style
+          - kde-config-gtk-style-preview
+          - kde-config-sddm
+          - kde-config-systemd
+          - sddm-theme-debian-breeze
+          - firefox-esr
+          - plasma-broswer-integration
+          - kdeconnect
+          - systemsettings
+          - kwin-addons
+          - kwin-x11
+          - pycharm-professional
+          - snapd
         install_recommends: false
 
     - name: Ensure the requested locale exists
@@ -175,21 +260,14 @@
       debconf:
         name: tzdata
         question: tzdata/Areas
-        value: Europe
+        value: America
         vtype: select
 
     - name: Set timezone city
       debconf:
         name: tzdata
         question: tzdata/Zones/Europe
-        value: London
-        vtype: select
-
-    - name: Set timezone UTC
-      debconf:
-        name: tzdata
-        question: tzdata/Zones/Etc
-        value: UTC
+        value: New_York
         vtype: select
 
     - name: Set keyboard
@@ -271,7 +349,7 @@
       lineinfile:
         path: /etc/default/grub
         regexp: '^GRUB_CMDLINE_LINUX='
-        line: 'GRUB_CMDLINE_LINUX="root=ZFS=rpool/ROOT/{{ zfs_system_root_name }} verbose intel_iommu=on iommu=pt rd.driver.blacklist=nouveau rd.module.blacklist=nouveau"'
+        line: 'GRUB_CMDLINE_LINUX="root=ZFS=rpool/ROOT/{{ zfs_system_root_name }} intel_iommu=on iommu=pt rd.driver.blacklist=nouveau rd.module.blacklist=nouveau"'
 
     - name: Update grub configuration files
       command: update-grub

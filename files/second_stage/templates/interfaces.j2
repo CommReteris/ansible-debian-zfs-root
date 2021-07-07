@@ -1,0 +1,5 @@
+auto {{ network_interface }}
+iface {{ network_interface }} inet static
+    address {{ ip_address }}
+    gateway {{ gateway_address }}
+    nameserver {{ nameserver_address }}

@@ -2,9 +2,12 @@
 external:
   hosts:
     # The ip address (or hostname) of the host you want to install
+    #
     example.machine.name:
+      debian_version: bullseye
       # The list of disks that you want to use for the root partition, as a
       # path from /dev (e.g for /dev/sda, use 'sda')
+      #
       # If you want a single disk, just pass a single entry in the array.
       #
       # Examples:
@@ -18,8 +21,11 @@ external:
       root_disks: ["nvme0n1"]
 
       # The ZFS pool mode for the boot and root pool.
+      #
       # If absent, assumes a single drive setup.
+      #
       # Useful values could be: mirror,raidz1,raidz2
+      #
       pool_mode:
 
       # The password to use to encrypt for the root pool
@@ -32,12 +38,17 @@ external:
       admin_username: "admin"
 
       # The password the admin, generate one using `mkpasswd --method=sha-512`
-      admin_password:
-
+      admin_password: 
       # The ssh public key for the administrator.
-      # This will enable logging in remotely
+      # This will enable logging in remotely and deciphering the disks.
       admin_public_key:
 
-      # The network interface on which to configure connectivity
-      #
+      ##
+      # Optional additional configuration
+      ##
+
+      # The network interface on which to configure connectivitycat /ert
       network_interface: enp4s0f1
+      ip_address: 
+      gateway: 
+      domain: example.com

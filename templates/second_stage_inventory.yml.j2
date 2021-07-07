@@ -2,6 +2,10 @@ external:
   hosts:
     /mnt:
       network_interface: {{ network_interface }}
+      ip_address: {{ ip_address }}
+      gateway_address: {{ gateway }}
+      nameserver_address: {{ gateway }}
+      search_domain: {{ domain }}
       fqdn: {{ fqdn }}
       root_disk: {{ root_disks[0] }}
       admin_username: {{ admin_username }}

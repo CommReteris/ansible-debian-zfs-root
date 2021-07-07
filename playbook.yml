@@ -6,7 +6,7 @@
     ansible_ssh_pass: live
     ansible_python_interpreter: /usr/bin/python3
     python_version: python3
-    debian_version: "{{ ansible_distribution_release }}"
+    debian_version: buster
     zfs_system_root_name: "{{ ansible_distribution | lower }}-{{ debian_version }}"
 
   tasks:
@@ -430,4 +430,4 @@
       command: sudo zpool export -a
 
     - name: Reboot
-      reboot:
+      command: sudo reboot now
